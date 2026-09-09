@@ -1,13 +1,14 @@
 # ASTER AI — Contract Architecture
 
 **Document ID:** ASTER-CON-001  
-**Version:** 1.0  
-**Status:** CONTRACT DESIGN / RED-TEAM PENDING  
-**Depends on:** ASTER-MAS-001 v1.0
+**Version:** 1.1  
+**Status:** CONTRACT ARCHITECTURE FROZEN  
+**Depends on:** ASTER-MAS-001 v1.0  
+**Red-Team:** 15-point gate resolved; five critical implementation attacks incorporated
 
 ## 1. Purpose
 
-This specification defines the canonical cross-plane contracts that connect ASTER's frozen architecture to implementation. Contracts define identity, ownership, lifecycle, immutability, versioning, provenance, authorization scope, validation responsibility, and producer/consumer boundaries.
+This specification defines the canonical cross-plane contracts that connect ASTER's frozen architecture to implementation. Contracts define identity, ownership, lifecycle, immutability, versioning, provenance, authorization scope, validation responsibility, serialization, payload boundaries, and producer/consumer boundaries.
 
 A contract is an architectural boundary, not an implementation-specific class, ORM entity, database table, or API framework type.
 
@@ -25,6 +26,11 @@ A contract is an architectural boundary, not an implementation-specific class, O
 10. Mutable operational state and immutable analytical artifacts are distinct concepts.
 11. Version changes are explicit; silent semantic mutation is prohibited.
 12. Secrets, credentials, tokens, and raw chain-of-thought are never domain-contract fields.
+13. Non-finite numerical values are never serialized as bare JSON numbers, strings, or null equivalents.
+14. Large analytical payloads are separated from control-plane metadata through explicit artifact references.
+15. Security context is established by trusted execution context; identifiers are not security credentials.
+16. Historical financial periods use explicit temporal boundaries and calendar semantics rather than fiscal labels alone.
+17. Deleted or inaccessible referenced objects have explicit tombstone semantics so consumers can degrade without dereference crashes.
 
 ## 3. Contract Envelope
 
@@ -34,8 +40,7 @@ Where applicable, persisted or cross-service domain objects use a common concept
 contract_type
 contract_version
 object_id
-tenant_scope
-workspace_scope
+scope
 created_at
 updated_at
 status
@@ -44,6 +49,8 @@ schema_version
 ```
 
 Not every object requires every field. The envelope is a design pattern, not a mandatory database row shape.
+
+`tenant_id` and `workspace_id` are represented through `scope` where applicable. They remain mandatory for tenant-owned resources but are not blindly repeated into every global object.
 
 ## 4. Identity Contracts
 
@@ -61,7 +68,7 @@ Required semantics:
 - temporal validity
 
 Owner: GEM / Data Plane.  
-Immutable identity; attributes may have versioned temporal states.
+Identity is immutable; attributes may have versioned temporal states.
 
 ### 4.2 Security
 
@@ -188,7 +195,7 @@ Includes:
 - value
 - unit
 - currency
-- period
+- temporal period object
 - dimensions
 - reporting basis
 - economic time
@@ -203,7 +210,37 @@ Owner: Data Plane / canonical financial store.
 
 FinancialFact is immutable after canonicalization. Corrections/restatements create new states or facts and preserve lineage.
 
-### 6.4 DataClassification
+### 6.4 FinancialPeriod
+
+A fiscal label is descriptive metadata, not the primary temporal identity.
+
+A material period must preserve:
+- period_type
+- start_boundary
+- end_boundary
+- boundary_semantics
+- fiscal_label where available
+- fiscal_year where applicable
+- fiscal_period where applicable
+- calendar/fiscal-calendar reference
+- timezone/date semantics appropriate to the source
+
+For interval-based financial periods, ASTER uses an explicit boundary convention. The preferred internal representation is a half-open interval `[start, end)` where practical, avoiding invented `23:59:59` timestamps and avoiding ambiguity around leap seconds, timezone conversions, and sub-second precision.
+
+Example:
+
+```text
+period_type: FISCAL_YEAR
+start_boundary: 2023-10-01
+end_boundary: 2024-10-01
+boundary_semantics: [start, end)
+fiscal_label: FY2023
+fiscal_calendar: issuer_calendar_v1
+```
+
+Fiscal labels such as `FY2023` are never sufficient by themselves for temporal comparison.
+
+### 6.5 DataClassification
 
 Controlled classification:
 
@@ -219,13 +256,16 @@ Polymorphic evidence base with:
 - evidence_id
 - evidence_type
 - canonical_reference
-- tenant/workspace scope
+- scope where applicable
 - source/provenance
 - context
 - epistemic state
 - rights/access state
 - snapshot identity
+- lifecycle state
 - creation metadata
+
+Evidence may be `ACTIVE`, `TOMBSTONED`, `RESTRICTED`, or `PURGED` according to policy. Consumers must handle non-active references without assuming the underlying object is dereferenceable.
 
 Concrete types:
 - FactEvidence
@@ -255,6 +295,8 @@ References a canonical table plus deterministic slice definition:
 - parent table hash
 - transformation/query definition
 
+Large slices must be represented through an immutable payload/artifact reference rather than embedded wholesale in control-plane messages.
+
 ### 7.5 DerivedEvidence
 
 Represents evidence produced from authoritative inputs through a recorded transformation or calculation. It must reference its inputs and transformation/calculation artifact.
@@ -274,9 +316,90 @@ Includes:
 States:
 `UNRESOLVED | RECONCILED | SUPERSEDED | CONTEXTUALLY_DISTINCT | REQUIRES_REVIEW`
 
-## 8. Calculation Contracts
+## 8. Numerical and Payload Contracts
 
-### 8.1 CalculationSpecification
+### 8.1 FinancialNumber
+
+Material numerical values must use a tagged representation rather than relying on language-specific floating-point JSON behavior.
+
+Conceptually:
+
+```text
+FinancialNumber
+├── FINITE
+│   ├── value
+│   ├── representation
+│   ├── precision/scale where applicable
+│   └── numeric metadata
+└── NON_FINITE
+    ├── status
+    ├── error_code
+    └── diagnostic metadata
+```
+
+Bare `NaN`, `Infinity`, `-Infinity`, or language-specific non-finite float encodings are prohibited on cross-plane contracts.
+
+A failed calculation must not serialize to `null`, zero, an empty string, or a textual fake-number representation.
+
+Examples:
+
+```text
+GOOD
+{
+  "status": "FAILED",
+  "error_code": "NON_CONVERGENT_INFINITY"
+}
+
+GOOD
+{
+  "status": "FINITE",
+  "value": "0.0842",
+  "representation": "DECIMAL"
+}
+```
+
+The exact wire encoding may be JSON-based, but the semantic contract must remain language-independent. A later binary numerical artifact may use Arrow/Parquet or another approved format while preserving the same semantics.
+
+### 8.2 PayloadReference
+
+Large data is not transported through ordinary control-plane JSON responses.
+
+A `PayloadReference` conceptually contains:
+- artifact_id
+- storage_class
+- media_type
+- serialization_format
+- content_hash
+- byte_size
+- schema_version
+- encryption/classification metadata
+- scoped access reference
+- expiration where applicable
+
+Control-plane responses return metadata and references. Heavy payloads are stored in object storage or an approved analytical artifact store.
+
+Typical large-payload formats include Apache Arrow or Parquet where their type/columnar characteristics are appropriate. The format is selected by artifact type and evaluation; it is not assumed to be the canonical domain contract itself.
+
+Example:
+
+```text
+{
+  "artifact_id": "calc_992",
+  "status": "SUCCEEDED",
+  "payload": {
+    "format": "PARQUET",
+    "object_ref": "obj_...",
+    "content_hash": "sha256:...",
+    "byte_size": 52428800
+  }
+}
+```
+
+Clients and services must not treat storage URIs alone as authorization. Access requires a scoped capability or authorized retrieval operation.
+
+## 9. Calculation Contracts
+
+### 9.1 CalculationSpecification
 
 Request to execute a named/versioned financial model or formula.
 
@@ -290,19 +413,19 @@ Includes:
 - numeric policy
 - execution constraints
 - requested output
-- authorization context reference
+- execution-context reference
 
 The specification is declarative. It does not contain arbitrary executable code.
 
-### 8.2 CalculationArtifact
+### 9.2 CalculationArtifact
 
 Durable record of a completed or failed calculation.
 
 Includes:
 - calculation_id
 - model/formula version
-- immutable input snapshot
-- assumption snapshot
+- immutable input snapshot reference
+- assumption snapshot reference
 - scenario/effective-state reference
 - execution graph
 - numeric policy
@@ -313,16 +436,17 @@ Includes:
 - provenance
 - environment identity
 - execution timestamps
+- large-output PayloadReference where applicable
 
-It is immutable after completion except for separately versioned verification metadata where policy permits.
+It is immutable after completion except for separately versioned verification metadata where policy permits. The calculation payload and its control-plane metadata remain separately addressable.
 
-### 8.3 NumericPolicy
+### 9.3 NumericPolicy
 
 Includes representation, precision, scale, rounding mode, intermediate precision, output precision, and tolerance. Display formatting is separate.
 
-## 9. Analytical Contracts
+## 10. Analytical Contracts
 
-### 9.1 Model
+### 10.1 Model
 
 Represents a versioned analytical model definition.
 
@@ -338,7 +462,7 @@ Includes:
 - implementation reference
 - evaluation status
 
-### 9.2 Scenario
+### 10.2 Scenario
 
 Represents an explicit delta over an immutable parent analytical state.
 
@@ -353,9 +477,9 @@ Includes:
 
 A scenario never silently overwrites its parent.
 
-## 10. Reasoning Contracts
+## 11. Reasoning Contracts
 
-### 10.1 Claim
+### 11.1 Claim
 
 Represents a material assertion produced or referenced by ASTER.
 
@@ -373,7 +497,7 @@ Includes:
 Claim types:
 `OBSERVATIONAL | DERIVED | INFERENTIAL | CAUSAL | HYPOTHETICAL | UNKNOWN`
 
-### 10.2 VerificationResult
+### 11.2 VerificationResult
 
 Represents verification of a claim, calculation, evidence object, or analytical artifact.
 
@@ -394,9 +518,9 @@ States:
 
 Verification does not become a universal confidence score.
 
-## 11. Workspace and Runtime Contracts
+## 12. Workspace and Runtime Contracts
 
-### 11.1 Workspace
+### 12.1 Workspace
 
 Represents the persistent user analytical environment.
 
@@ -411,7 +535,7 @@ Includes:
 
 Authorization is not embedded as an informal list of user IDs inside financial objects.
 
-### 11.2 Execution
+### 12.2 Execution
 
 Represents a cognitive/analytical runtime execution.
 
@@ -419,7 +543,7 @@ Includes:
 - execution_id
 - parent/request reference
 - task type
-- workspace/tenant scope
+- tenant/workspace scope
 - execution status
 - execution event references
 - evidence snapshot reference
@@ -430,7 +554,7 @@ Includes:
 
 Execution is a traceable runtime object, not canonical financial truth.
 
-### 11.3 Job
+### 12.3 Job
 
 Represents durable asynchronous work.
 
@@ -451,7 +575,7 @@ Includes:
 States:
 `CREATED | QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED | TIMED_OUT | RETRYING`
 
-### 11.4 Event
+### 12.4 Event
 
 Represents a durable domain or operational event.
 
@@ -462,12 +586,12 @@ Includes:
 - tenant/workspace scope where applicable
 - event timestamp
 - causation/correlation references
-- payload
+- payload or PayloadReference
 - schema version
 
 Events describe committed state transitions where authoritative state is involved.
 
-## 12. ExecutionContext Contract
+## 13. ExecutionContext Contract
 
 ExecutionContext binds an operation to its authorized environment.
 
@@ -488,10 +612,76 @@ Conceptually includes:
 - rights/export constraints
 - resource limits
 - expiration
+- context version
 
 ExecutionContext is security-sensitive and must never be accepted wholesale from an untrusted LLM or client.
 
-## 13. Relationship Rules
+### 13.1 Resource references and tenancy
+
+ASTER does **not** use tenant-bearing composite URNs as the primary security mechanism.
+
+A resource reference may carry scope context for routing, validation, or observability, but the canonical object identifier remains opaque and non-authorizing.
+
+The security rule is:
+
+```text
+Client / LLM
+   ↓ untrusted request
+System authorization
+   ↓
+Trusted ExecutionContext
+   ↓
+Scoped resource reference
+   ↓
+Service authorization + RLS/storage policy
+   ↓
+Resource
+```
+
+Therefore:
+
+- `fact_id` alone is not sufficient for an authorized cross-plane operation.
+- A tenant-bearing identifier is not itself proof of authorization.
+- A compromised worker cannot gain access merely by constructing another tenant's ID/reference.
+- PostgreSQL RLS remains a final enforcement boundary.
+- Object-storage capabilities are scoped and short-lived where supported.
+
+Tenant identity may be visible in trusted execution context and authorization metadata without being baked into every canonical identifier. This avoids identifier-based authorization, unnecessary tenant disclosure, and rigid identity coupling.
+
+## 14. Tombstone Semantics
+
+Deletion, crypto-shredding, retention expiry, legal restriction, or policy revocation may make a referenced object unavailable while historical references remain.
+
+A referenced object therefore has explicit lifecycle visibility:
+
+```text
+ACTIVE
+TOMBSTONED
+RESTRICTED
+PURGED
+```
+
+A tombstone response may preserve only the minimum non-sensitive metadata required for referential integrity and audit semantics, for example:
+
+```text
+{
+  "object_id": "fact_492",
+  "lifecycle_state": "TOMBSTONED",
+  "tombstone_reason": "TENANT_ERASURE",
+  "deleted_at": "..."
+}
+```
+
+The presence of a tombstone does not imply that the deleted financial content remains recoverable. Highly restricted data may be cryptographically destroyed while the minimum non-sensitive referential record survives under retention policy.
+
+Consumers must:
+- never crash on tombstoned references;
+- never attempt unauthorized recovery;
+- avoid displaying sensitive deleted metadata;
+- distinguish `TOMBSTONED` from `NOT_FOUND` where policy requires;
+- preserve historical relationship semantics without resurrecting erased data.
+
+## 15. Relationship Rules
 
 Canonical relationships include:
 
@@ -514,7 +704,9 @@ Event → Aggregate / Causation / Correlation
 Workspace → Analytical State / Policies
 ```
 
-## 14. Immutability Matrix
+References must remain resolvable according to lifecycle policy, but resolvability never overrides authorization or deletion policy.
+
+## 16. Immutability Matrix
 
 | Contract | Default mutation policy |
 |---|---|
@@ -522,8 +714,10 @@ Workspace → Analytical State / Policies
 | Security identity | Immutable; lifecycle versioned |
 | Identifier | Append/version with temporal validity |
 | FinancialConcept | Versioned |
+| FormulaSpecification | Versioned |
 | Source | Versioned metadata |
 | Provenance | Append-only lineage |
+| FinancialPeriod | Immutable within a fact state |
 | FinancialFact | Immutable canonical fact; revisions are new states |
 | Evidence snapshot | Immutable once used in execution |
 | CalculationSpecification | Immutable execution request |
@@ -537,8 +731,9 @@ Workspace → Analytical State / Policies
 | Job | Controlled lifecycle transitions |
 | Event | Append-only |
 | ExecutionContext | Immutable for an execution; scoped/expiring |
+| PayloadReference | Immutable content identity; access capability separately expires |
 
-## 15. Validation Ownership
+## 17. Validation Ownership
 
 | Validation | Owner |
 |---|---|
@@ -555,8 +750,10 @@ Workspace → Analytical State / Policies
 | Claim verification | Verification Plane |
 | Output policy | Output Governance |
 | External egress | Egress Security boundary |
+| Serialization/schema validity | Contract boundary / producer + consumer validation |
+| Payload integrity | Artifact/storage boundary |
 
-## 16. Cross-Service Contract Rules
+## 18. Cross-Service Contract Rules
 
 System Plane ↔ Intelligence Plane communication must use explicit versioned contracts.
 
@@ -568,7 +765,9 @@ Streaming events must distinguish:
 
 No event should imply committed state before commit.
 
-## 17. Security Rules
+Large analytical results must use PayloadReference rather than synchronous oversized JSON responses.
+
+## 19. Security Rules
 
 - Tenant scope must be explicit for tenant-owned contracts.
 - Worker identity is never derived solely from a job payload field.
@@ -577,8 +776,11 @@ No event should imply committed state before commit.
 - Data classification and provenance travel with evidence sufficiently to enforce egress policy.
 - Secrets are references to secret-management infrastructure, never plaintext contract fields.
 - Audit events are separate from ordinary application state.
+- Identifiers and resource references are not authorization credentials.
+- Tombstones must not leak restricted content.
+- Serialization must not turn failure into a valid-looking financial value.
 
-## 18. Contract Anti-Patterns
+## 20. Contract Anti-Patterns
 
 The following are prohibited:
 
@@ -593,29 +795,114 @@ The following are prohibited:
 - An event emitted before authoritative commit.
 - A retrieval index becoming a second financial truth store.
 - Credentials embedded in execution or calculation artifacts.
+- Bare `NaN`, `Infinity`, or `-Infinity` in cross-plane JSON.
+- Non-finite numeric failures represented as `null`, zero, empty string, or fake numeric strings.
+- Large binary/analytical payloads embedded directly in control-plane messages.
+- Fiscal labels used as the sole temporal identity of financial periods.
+- Tenant-bearing IDs treated as authorization proof.
+- Foreign-key failure assumed to be the only possible state after deletion.
 
-## 19. Red-Team Questions Before Freeze
+## 21. Red-Team Resolution Record
 
-The following must be resolved before this contract architecture becomes frozen:
+The original 15-point contract gate was attacked against five high-impact implementation failures.
 
-1. Which identity fields are globally unique versus tenant-scoped?
-2. Exactly which temporal dimensions are mandatory per contract type?
-3. How are currency and unit dimensions represented across TypeScript, Python, and SQL without semantic loss?
-4. What is the canonical serialization format for cross-plane contracts?
-5. Which fields are required for deterministic idempotency keys?
-6. How are schema migrations handled for immutable historical artifacts?
-7. How are deleted/crypto-shredded objects represented without leaking sensitive metadata?
-8. What is the exact distinction between workspace, tenant, organization, and user scopes?
-9. How are authorization claims propagated without trusting worker-supplied scopes?
-10. Which events are domain events versus integration/operational events?
-11. How are large evidence/document payloads represented without embedding binaries in messages?
-12. How are partial calculation failures represented while preserving reproducibility?
-13. How are model/version references guaranteed to remain resolvable after deprecation?
-14. How are cross-contract circular dependencies prevented?
-15. What contract compatibility policy governs breaking versus additive changes?
+### 21.1 Serialization Trap — RESOLVED
 
-## 20. Freeze Gate
+Python/NumPy/Pandas non-finite values cannot cross the domain boundary as native JSON numbers. FinancialNumber uses tagged finite/non-finite semantics. Calculation failure is structurally represented and cannot degrade into `null` or a plausible value.
 
-This document is intentionally **not yet frozen**. The next architectural action is a contract red-team covering identity, temporal semantics, serialization, tenancy, lifecycle, version compatibility, failure semantics, and dependency cycles.
+### 21.2 Large Payload Paradox — RESOLVED
 
-Only after those questions are resolved should ASTER-CON-001 v1.0 be marked FROZEN and used as the direct precursor to repository/domain implementation.
+Control-plane contracts carry metadata and PayloadReference. Heavy Monte Carlo paths, large table slices, extracted datasets, and similar artifacts are stored separately. Object-storage references are not themselves authorization credentials.
+
+### 21.3 Temporal String Fallacy — RESOLVED
+
+FinancialPeriod requires explicit temporal boundaries and fiscal-calendar semantics. Labels such as `FY2023` remain descriptive metadata only. Half-open interval semantics are preferred to invented end-of-day timestamps.
+
+### 21.4 Orphaned Provenance Deletion Trap — RESOLVED
+
+Referenced resources have explicit lifecycle/tombstone semantics. Tombstones preserve only the minimum policy-permitted referential metadata and do not imply recoverability of erased content.
+
+### 21.5 Tenant Identity Bleed — RESOLVED WITH CORRECTION
+
+The proposed composite URN approach is **not** adopted as the security boundary. Tenant-bearing identifiers can leak tenant context and do not prove authorization. ASTER instead mandates trusted ExecutionContext, scoped resource references, service authorization, PostgreSQL RLS, and storage policy. IDs remain opaque and non-authorizing.
+
+## 22. Contract Compatibility Policy
+
+Contract evolution follows explicit compatibility rules:
+
+- **Additive optional field:** normally backward compatible.
+- **Additive required field:** breaking unless a versioned migration/default contract exists.
+- **Enum addition:** potentially breaking for closed-set consumers; consumers must use explicit unknown-value handling or coordinated versioning.
+- **Field type/semantic change:** breaking.
+- **Unit/currency meaning change:** always breaking.
+- **Temporal semantic change:** always breaking.
+- **Epistemic/verification meaning change:** always breaking.
+- **Lifecycle-state meaning change:** always breaking.
+- **Removal/renaming:** breaking.
+- **Security/authorization semantic change:** breaking and requires architectural review.
+
+Historical immutable artifacts remain interpretable through the schema/model versions under which they were created. Compatibility layers may translate old contracts into newer runtime representations, but may not rewrite historical truth.
+
+## 23. Cross-Contract Dependency Rule
+
+Canonical contracts must not form unbounded recursive object graphs.
+
+Use stable references for cross-boundary relationships. Embedded objects are reserved for bounded value objects whose lifecycle is owned by the containing contract.
+
+Examples of bounded value objects include:
+- FinancialPeriod
+- NumericPolicy
+- DataClassification
+- scoped policy descriptors
+
+Examples of stable references include:
+- Entity
+- Security
+- FinancialConcept
+- FinancialFact
+- Evidence
+- CalculationArtifact
+- Model
+- Workspace
+- Execution
+
+This prevents payload explosions, circular serialization, and accidental ownership coupling.
+
+## 24. Deterministic Idempotency Contract
+
+Material asynchronous operations require an idempotency key derived from immutable request semantics, including as applicable:
+
+- tenant/workspace scope
+- operation type
+- contract version
+- model/formula version
+- input snapshot identity
+- assumption snapshot identity
+- scenario/effective-state identity
+- numeric policy
+- relevant execution configuration
+
+The idempotency key must not depend on mutable display labels, current time, or non-semantic ordering.
+
+For stochastic execution, the random seed and sampling configuration are part of reproducibility semantics where deterministic replay is required.
+
+## 25. Freeze Gate
+
+**STATUS: PASSED — ASTER-CON-001 v1.1 FROZEN**
+
+The five critical red-team failures have been incorporated, and the 15-point gate is resolved sufficiently to serve as the implementation contract foundation.
+
+The following are now architectural requirements:
+
+1. Tagged numerical unions for non-finite values.
+2. Explicit control-plane versus payload-plane boundary.
+3. Absolute temporal boundaries plus fiscal-calendar semantics.
+4. Tombstone lifecycle semantics for referential continuity.
+5. Trusted execution context and scoped authorization instead of tenant-bearing IDs as security proof.
+6. Explicit contract compatibility rules.
+7. Stable references to prevent recursive contract graphs.
+8. Deterministic idempotency semantics for material asynchronous work.
+
+**Implementation may now proceed to the Repository Architecture stage.**
+
+Architecture changes after this point require explicit architectural review, a new contract version where applicable, red-team validation, documentation, and repository verification before implementation semantics are changed.
