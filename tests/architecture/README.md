@@ -1,3 +1,7 @@
-# Architecture Tests
+# Architecture Boundary Tests
 
-Repository architecture tests will mechanically enforce dependency direction, forbidden imports, framework leakage, direct cognitive database access, and generated-contract drift.
+Architecture boundaries are enforced by executable checks in `scripts/check-architecture.sh` and CI.
+
+The guard is intentionally conservative: it checks forbidden dependency patterns and required architecture documents without attempting to infer business semantics from source text.
+
+Future domain implementations must extend these checks as new authority boundaries become material.
