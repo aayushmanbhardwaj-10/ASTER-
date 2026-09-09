@@ -1,7 +1,5 @@
 # Architecture Boundary Tests
 
-Architecture boundaries are enforced by executable checks in `scripts/check-architecture.sh` and CI.
+Executable boundary checks live here and in `scripts/check-architecture.sh`.
 
-The guard is intentionally conservative: it checks forbidden dependency patterns and required architecture documents without attempting to infer business semantics from source text.
-
-Future domain implementations must extend these checks as new authority boundaries become material.
+The checks intentionally validate only mechanically enforceable architectural constraints: forbidden framework/database dependencies in protected layers and required architecture documents. They do not attempt to infer financial semantics from source text.

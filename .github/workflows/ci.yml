@@ -23,7 +23,9 @@ jobs:
       - name: Test
         run: npm test
       - name: Architecture guard
-        run: bash scripts/check-architecture.sh
+        run: npm run architecture:test
+      - name: Contract semantic checks
+        run: npm run contract:test
 
   python-foundation:
     runs-on: ubuntu-latest

@@ -2,13 +2,16 @@
   "name": "aster-ai",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "workspaces": [
     "apps/system-api",
     "packages/contracts"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && node --test tests/contract/*.test.js",
+    "architecture:test": "bash tests/architecture/architecture-boundaries.test.sh",
+    "contract:test": "bash scripts/check-contract-semantics.sh",
     "lint": "npm run lint --workspaces --if-present"
   }
 }
