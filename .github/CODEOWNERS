@@ -1,0 +1,9 @@
+# ASTER architectural ownership boundaries
+/architecture/ @aayushmanbhardwaj-10
+/packages/contracts/ @aayushmanbhardwaj-10
+/packages/ontology/ @aayushmanbhardwaj-10
+/packages/data-domain/ @aayushmanbhardwaj-10
+/packages/calculation-domain/ @aayushmanbhardwaj-10
+/packages/verification-domain/ @aayushmanbhardwaj-10
+/database/ @aayushmanbhardwaj-10
+/infrastructure/ @aayushmanbhardwaj-10

@@ -1,0 +1,14 @@
+{
+  "name": "@aster/contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test",
+    "lint": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
