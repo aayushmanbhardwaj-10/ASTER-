@@ -63,6 +63,8 @@ const VALID_CONTEXT_DIMENSIONS = new Set(["ACCOUNTING_FRAMEWORK", "JURISDICTION"
 
 function contextsOverlap(a: ApplicabilityContext = {}, b: ApplicabilityContext = {}): boolean { return CONTEXT_KEYS.every((key) => !a[key] || !b[key] || a[key] === b[key]); }
 
+function isFractionalScalar(dimension: string): boolean { return dimension === "DIMENSIONLESS" || dimension === "RATIO" || dimension === "RATE"; }
+
 function expressionType(node: JsonObject, inputs: Map<string, TypeInfo>, diagnostics: Diagnostic[]): TypeInfo | undefined {
   switch (node.kind) {
     case "INPUT": {
@@ -81,9 +83,9 @@ function expressionType(node: JsonObject, inputs: Map<string, TypeInfo>, diagnos
       const left = expressionType(node.left as JsonObject, inputs, diagnostics), right = expressionType(node.right as JsonObject, inputs, diagnostics);
       if (!left || !right) return undefined;
       const sameDimension = left.dimension === right.dimension;
-      const scalarCompatibility = (left.dimension === "DIMENSIONLESS" || left.dimension === "RATIO") && (right.dimension === "DIMENSIONLESS" || right.dimension === "RATIO");
+      const scalarCompatibility = isFractionalScalar(left.dimension) && isFractionalScalar(right.dimension);
       if ((!sameDimension && !scalarCompatibility) || left.currencyRequired !== right.currencyRequired) { diagnostics.push(error("SEMANTIC_TYPE", `Incompatible ${String(node.kind)} dimensions: ${left.dimension} and ${right.dimension}.`)); return undefined; }
-      if (left.dimension === "RATE" && right.dimension === "RATE") return { dimension: "RATE", measure: "RATE", currencyRequired: false };
+      if (left.dimension === "RATE" || right.dimension === "RATE") return { dimension: "RATE", measure: "RATE", currencyRequired: false };
       return left;
     }
     case "MULTIPLY": {
