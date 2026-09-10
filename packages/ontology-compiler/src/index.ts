@@ -27,8 +27,8 @@ function expressionType(node: any, inputs: Map<string, TypeInfo>, diagnostics: D
       const l = expressionType(node.left, inputs, diagnostics), r = expressionType(node.right, inputs, diagnostics); if (!l || !r) return;
       if (l.dimension === "DIMENSIONLESS" || l.dimension === "RATIO") return r;
       if (r.dimension === "DIMENSIONLESS" || r.dimension === "RATIO") return l;
-      if (l.dimension === "RATE" && r.dimension === "CURRENCY_AMOUNT") return { dimension: "CURRENCY_AMOUNT", measure: r.measure, currencyRequired: true };
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", measure: l.measure, currencyRequired: true };
+      if (l.dimension === "RATE" && r.dimension === "CURRENCY_AMOUNT") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(r.measure ? { measure: r.measure } : {}) };
+      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(l.measure ? { measure: l.measure } : {}) };
       if (l.dimension === "RATE" && r.dimension === "RATE") return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
       if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
       diagnostics.push(error("SEMANTIC_TYPE", `Unsupported multiplication dimensions: ${l.dimension} * ${r.dimension}.`)); return;
@@ -36,7 +36,7 @@ function expressionType(node: any, inputs: Map<string, TypeInfo>, diagnostics: D
     case "DIVIDE": {
       const l = expressionType(node.left, inputs, diagnostics), r = expressionType(node.right, inputs, diagnostics); if (!l || !r) return;
       if (r.dimension === "DIMENSIONLESS" || r.dimension === "RATIO") return l;
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", measure: l.measure, currencyRequired: true };
+      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(l.measure ? { measure: l.measure } : {}) };
       if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
       if (l.dimension === r.dimension) return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
       diagnostics.push(error("SEMANTIC_TYPE", `Unsupported division dimensions: ${l.dimension} / ${r.dimension}.`)); return;
