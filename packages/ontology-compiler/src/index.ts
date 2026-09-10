@@ -2,60 +2,400 @@ import { createHash } from "node:crypto";
 
 export const COMPILER_VERSION = "ASTER-ONTOLOGY-COMPILER-0.1.0";
 export type DiagnosticSeverity = "ERROR" | "WARNING" | "INFO";
-export type DiagnosticPhase = "LEXICAL" | "CONTEXT" | "REFERENCE" | "DEPENDENCY" | "SEMANTIC_TYPE" | "FORMULA_RESOLUTION" | "REACHABILITY" | "CONSISTENCY" | "ARTIFACT";
-export interface Diagnostic { diagnosticId: string; severity: DiagnosticSeverity; phase: DiagnosticPhase; conceptId?: string; formulaId?: string; variantId?: string; sourceLocation?: string; message: string; relatedObjects?: readonly string[]; }
-export interface SeedManifest { manifestId: string; manifestVersion: string; status: "DRAFT" | "RELEASE_CANDIDATE"; semanticVersion: string; ontologyVersion: string; baseReleaseId?: string | null; sourceReferences: readonly Record<string, unknown>[]; constraints: readonly Record<string, any>[]; concepts: readonly Record<string, any>[]; relationships: readonly Record<string, any>[]; formulaFamilies: readonly Record<string, any>[]; }
-interface TypeInfo { dimension: string; measure?: string; currencyRequired: boolean; }
-const error = (phase: DiagnosticPhase, message: string, extra: Partial<Diagnostic> = {}): Diagnostic => ({ diagnosticId: `${phase}_${message}`.replace(/[^A-Za-z0-9_]+/g, "_").slice(0, 180), severity: "ERROR", phase, message, ...extra });
-function stable(value: unknown): string { if (value === null || typeof value !== "object") return JSON.stringify(value); if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`; const o = value as Record<string, unknown>; return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${stable(o[k])}`).join(",")}}`; }
-function normalizeAlias(value: string): string { return value.normalize("NFKC").trim().toLocaleLowerCase("en-US"); }
-function contextKey(c: any = {}): string { return ["accountingFramework","jurisdiction","industry","entityType","reportingBasis","securityClass","currency"].map(k => `${k}=${c[k] ?? "*"}`).join("|"); }
-function contextsOverlap(a: any = {}, b: any = {}): boolean { for (const k of ["accountingFramework","jurisdiction","industry","entityType","reportingBasis","securityClass","currency"]) if (a[k] && b[k] && a[k] !== b[k]) return false; return true; }
-function expressionType(node: any, inputs: Map<string, TypeInfo>, diagnostics: Diagnostic[]): TypeInfo | undefined {
-  if (!node || typeof node !== "object") { diagnostics.push(error("SEMANTIC_TYPE", "Expression node is missing or invalid.")); return; }
+export type DiagnosticPhase =
+  | "LEXICAL"
+  | "CONTEXT"
+  | "REFERENCE"
+  | "DEPENDENCY"
+  | "SEMANTIC_TYPE"
+  | "FORMULA_RESOLUTION"
+  | "REACHABILITY"
+  | "CONSISTENCY"
+  | "ARTIFACT";
+
+export interface Diagnostic {
+  diagnosticId: string;
+  severity: DiagnosticSeverity;
+  phase: DiagnosticPhase;
+  conceptId?: string;
+  formulaId?: string;
+  variantId?: string;
+  sourceLocation?: string;
+  message: string;
+  relatedObjects?: readonly string[];
+}
+
+type JsonObject = Record<string, unknown>;
+type UnitSemantics = {
+  dimension: string;
+  measureSemantics?: string;
+  currencyRequired: boolean;
+  canonicalUnit?: string;
+};
+type ApplicabilityContext = {
+  accountingFramework?: string;
+  jurisdiction?: string;
+  industry?: string;
+  entityType?: string;
+  reportingBasis?: string;
+  securityClass?: string;
+  currency?: string;
+  requiredDimensions?: readonly string[];
+};
+type FormulaInput = {
+  name: string;
+  conceptId: string;
+  unitSemantics: UnitSemantics;
+  temporalBinding?: { relation?: string; offset?: number; anchor?: string; alignment?: string; granularity?: string; calendar?: string };
+};
+type FormulaVariant = {
+  variantId: string;
+  formulaId: string;
+  version: string;
+  familyId: string;
+  targetConceptId: string;
+  fidelityRank: number;
+  expression: JsonObject;
+  inputs: readonly FormulaInput[];
+  outputUnitSemantics: UnitSemantics;
+  constraints: readonly string[];
+  provenance: readonly string[];
+  status: string;
+  applicableContext?: ApplicabilityContext;
+};
+type FormulaFamily = {
+  familyId: string;
+  targetConceptId: string;
+  variants: readonly FormulaVariant[];
+  solutionVariants?: readonly FormulaVariant[];
+};
+type Concept = {
+  conceptId: string;
+  canonicalName: string;
+  definition: string;
+  realm: string;
+  role: string;
+  unitSemantics: UnitSemantics;
+  applicability?: ApplicabilityContext;
+  aliases?: readonly { value: string; normalizedValue?: string; applicability?: ApplicabilityContext }[];
+  sourceReferences?: readonly string[];
+  relationships?: readonly { relationshipId: string; sourceConceptId: string; targetConceptId: string; sourceReferences: readonly string[] }[];
+};
+type Constraint = { constraintId: string; referencedConceptIds?: readonly string[] };
+type SourceReference = { sourceReferenceId: string };
+
+export interface SeedManifest {
+  manifestId: string;
+  manifestVersion: string;
+  status: "DRAFT" | "RELEASE_CANDIDATE";
+  semanticVersion: string;
+  ontologyVersion: string;
+  baseReleaseId?: string | null;
+  sourceReferences: readonly SourceReference[];
+  constraints: readonly Constraint[];
+  concepts: readonly Concept[];
+  relationships: readonly JsonObject[];
+  formulaFamilies: readonly FormulaFamily[];
+  effectiveDuring?: { start: string; end?: string; boundarySemantics: string };
+}
+
+interface TypeInfo {
+  dimension: string;
+  measure?: string;
+  currencyRequired: boolean;
+}
+
+const error = (
+  phase: DiagnosticPhase,
+  message: string,
+  extra: Partial<Diagnostic> = {},
+): Diagnostic => ({
+  diagnosticId: `${phase}_${message}`.replace(/[^A-Za-z0-9_]+/g, "_").slice(0, 180),
+  severity: "ERROR",
+  phase,
+  message,
+  ...extra,
+});
+
+function stable(value: unknown): string {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Non-finite numeric value cannot be serialized into a release artifact.");
+    return JSON.stringify(value);
+  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stable(object[key])}`).join(",")}}`;
+}
+
+function normalizeAlias(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+}
+
+const CONTEXT_KEYS = [
+  "accountingFramework",
+  "jurisdiction",
+  "industry",
+  "entityType",
+  "reportingBasis",
+  "securityClass",
+  "currency",
+] as const;
+
+function contextsOverlap(a: ApplicabilityContext = {}, b: ApplicabilityContext = {}): boolean {
+  return CONTEXT_KEYS.every((key) => !a[key] || !b[key] || a[key] === b[key]);
+}
+
+function expressionType(node: JsonObject, inputs: Map<string, TypeInfo>, diagnostics: Diagnostic[]): TypeInfo | undefined {
   switch (node.kind) {
-    case "INPUT": { const t = inputs.get(node.inputName); if (!t) diagnostics.push(error("SEMANTIC_TYPE", `Unbound expression input: ${node.inputName}.`)); return t; }
-    case "CONSTANT": return node.unitSemantics ? { dimension: node.unitSemantics.dimension, measure: node.unitSemantics.measureSemantics, currencyRequired: !!node.unitSemantics.currencyRequired } : { dimension: "DIMENSIONLESS", measure: "RATIO", currencyRequired: false };
-    case "NEGATE": return expressionType(node.operand, inputs, diagnostics);
-    case "ADD": case "SUBTRACT": {
-      const l = expressionType(node.left, inputs, diagnostics), r = expressionType(node.right, inputs, diagnostics); if (!l || !r) return;
-      const compatible = l.dimension === r.dimension || (l.dimension === "RATE" && ["RATIO","DIMENSIONLESS"].includes(r.dimension)) || (r.dimension === "RATE" && ["RATIO","DIMENSIONLESS"].includes(l.dimension));
-      if (!compatible || l.currencyRequired !== r.currencyRequired) diagnostics.push(error("SEMANTIC_TYPE", `Incompatible ${node.kind} dimensions: ${l.dimension} and ${r.dimension}.`));
-      return compatible ? (l.dimension === "RATE" || r.dimension === "RATE" ? { dimension: "RATE", measure: "RATE", currencyRequired: false } : l) : undefined;
+    case "INPUT": {
+      const name = typeof node.inputName === "string" ? node.inputName : "";
+      const type = inputs.get(name);
+      if (!type) diagnostics.push(error("SEMANTIC_TYPE", `Unbound expression input: ${name}.`));
+      return type;
+    }
+    case "CONSTANT": {
+      const unit = node.unitSemantics as UnitSemantics | undefined;
+      return unit
+        ? { dimension: unit.dimension, measure: unit.measureSemantics, currencyRequired: unit.currencyRequired }
+        : { dimension: "DIMENSIONLESS", measure: "RATIO", currencyRequired: false };
+    }
+    case "NEGATE":
+      return expressionType(node.operand as JsonObject, inputs, diagnostics);
+    case "ADD":
+    case "SUBTRACT": {
+      const left = expressionType(node.left as JsonObject, inputs, diagnostics);
+      const right = expressionType(node.right as JsonObject, inputs, diagnostics);
+      if (!left || !right) return undefined;
+      const sameDimension = left.dimension === right.dimension;
+      const scalarCompatibility =
+        (left.dimension === "DIMENSIONLESS" || left.dimension === "RATIO") &&
+        (right.dimension === "DIMENSIONLESS" || right.dimension === "RATIO");
+      const compatible = sameDimension || scalarCompatibility;
+      if (!compatible || left.currencyRequired !== right.currencyRequired) {
+        diagnostics.push(error("SEMANTIC_TYPE", `Incompatible ${String(node.kind)} dimensions: ${left.dimension} and ${right.dimension}.`));
+        return undefined;
+      }
+      if (left.dimension === "RATE" && right.dimension === "RATE") return { dimension: "RATE", measure: "RATE", currencyRequired: false };
+      return left;
     }
     case "MULTIPLY": {
-      const l = expressionType(node.left, inputs, diagnostics), r = expressionType(node.right, inputs, diagnostics); if (!l || !r) return;
-      if (l.dimension === "DIMENSIONLESS" || l.dimension === "RATIO") return r;
-      if (r.dimension === "DIMENSIONLESS" || r.dimension === "RATIO") return l;
-      if (l.dimension === "RATE" && r.dimension === "CURRENCY_AMOUNT") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(r.measure ? { measure: r.measure } : {}) };
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(l.measure ? { measure: l.measure } : {}) };
-      if (l.dimension === "RATE" && r.dimension === "RATE") return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
-      diagnostics.push(error("SEMANTIC_TYPE", `Unsupported multiplication dimensions: ${l.dimension} * ${r.dimension}.`)); return;
+      const left = expressionType(node.left as JsonObject, inputs, diagnostics);
+      const right = expressionType(node.right as JsonObject, inputs, diagnostics);
+      if (!left || !right) return undefined;
+      if (left.dimension === "DIMENSIONLESS" || left.dimension === "RATIO") return right;
+      if (right.dimension === "DIMENSIONLESS" || right.dimension === "RATIO") return left;
+      if (left.dimension === "RATE" && right.dimension === "CURRENCY_AMOUNT") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(right.measure ? { measure: right.measure } : {}) };
+      if (left.dimension === "CURRENCY_AMOUNT" && right.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(left.measure ? { measure: left.measure } : {}) };
+      if (left.dimension === "RATE" && right.dimension === "RATE") return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
+      if (left.dimension === "CURRENCY_AMOUNT" && right.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
+      diagnostics.push(error("SEMANTIC_TYPE", `Unsupported multiplication dimensions: ${left.dimension} * ${right.dimension}.`));
+      return undefined;
     }
     case "DIVIDE": {
-      const l = expressionType(node.left, inputs, diagnostics), r = expressionType(node.right, inputs, diagnostics); if (!l || !r) return;
-      if (r.dimension === "DIMENSIONLESS" || r.dimension === "RATIO") return l;
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(l.measure ? { measure: l.measure } : {}) };
-      if (l.dimension === "CURRENCY_AMOUNT" && r.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
-      if (l.dimension === r.dimension) return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
-      diagnostics.push(error("SEMANTIC_TYPE", `Unsupported division dimensions: ${l.dimension} / ${r.dimension}.`)); return;
+      const left = expressionType(node.left as JsonObject, inputs, diagnostics);
+      const right = expressionType(node.right as JsonObject, inputs, diagnostics);
+      if (!left || !right) return undefined;
+      if (right.dimension === "DIMENSIONLESS" || right.dimension === "RATIO") return left;
+      if (left.dimension === "CURRENCY_AMOUNT" && right.dimension === "RATE") return { dimension: "CURRENCY_AMOUNT", currencyRequired: true, ...(left.measure ? { measure: left.measure } : {}) };
+      if (left.dimension === "CURRENCY_AMOUNT" && right.dimension === "SHARE_QUANTITY") return { dimension: "PRICE", measure: "POINT_IN_TIME", currencyRequired: true };
+      if (left.dimension === right.dimension) return { dimension: "RATIO", measure: "RATIO", currencyRequired: false };
+      diagnostics.push(error("SEMANTIC_TYPE", `Unsupported division dimensions: ${left.dimension} / ${right.dimension}.`));
+      return undefined;
     }
     case "POWER": {
-      const b = expressionType(node.base, inputs, diagnostics), e = expressionType(node.exponent, inputs, diagnostics); if (!b || !e) return;
-      if (e.dimension !== "DIMENSIONLESS" && e.dimension !== "RATIO") diagnostics.push(error("SEMANTIC_TYPE", "Power exponent must be dimensionless."));
-      if (b.dimension !== "DIMENSIONLESS" && b.dimension !== "RATIO" && b.dimension !== "RATE") diagnostics.push(error("SEMANTIC_TYPE", "Power base must be a dimensionless rate expression."));
+      const base = expressionType(node.base as JsonObject, inputs, diagnostics);
+      const exponent = expressionType(node.exponent as JsonObject, inputs, diagnostics);
+      if (!base || !exponent) return undefined;
+      if (exponent.dimension !== "DIMENSIONLESS" && exponent.dimension !== "RATIO") diagnostics.push(error("SEMANTIC_TYPE", "Power exponent must be dimensionless."));
+      if (base.dimension !== "DIMENSIONLESS" && base.dimension !== "RATIO" && base.dimension !== "RATE") diagnostics.push(error("SEMANTIC_TYPE", "Power base must be a scalar rate expression."));
       return { dimension: "DIMENSIONLESS", measure: "RATIO", currencyRequired: false };
     }
-    default: diagnostics.push(error("LEXICAL", `Unknown expression node kind: ${String(node.kind)}.`)); return;
+    default:
+      diagnostics.push(error("LEXICAL", `Unknown expression node kind: ${String(node.kind)}.`));
+      return undefined;
   }
 }
-function stageLexical(s: SeedManifest, d: Diagnostic[]) { if (!/^\d+\.\d+\.\d+$/.test(s.semanticVersion)) d.push(error("LEXICAL", "semanticVersion must use SemVer MAJOR.MINOR.PATCH.")); const ids = new Set<string>(); for (const c of s.concepts) { if (!/^concept_[a-z0-9_]+$/.test(c.conceptId ?? "")) d.push(error("LEXICAL", `Invalid concept ID: ${c.conceptId}.`, { conceptId: c.conceptId })); if (ids.has(c.conceptId)) d.push(error("LEXICAL", `Duplicate concept ID: ${c.conceptId}.`, { conceptId: c.conceptId })); ids.add(c.conceptId); for (const k of ["canonicalName","definition","realm","role","unitSemantics","effectiveDuring"]) if (!c[k]) d.push(error("LEXICAL", `Missing ${k} on concept ${c.conceptId}.`, { conceptId: c.conceptId })); } }
-function stageContext(s: SeedManifest, d: Diagnostic[]) { const aliases = new Map<string,string[]>(); for (const c of s.concepts) for (const a of c.aliases ?? []) { const key = `${normalizeAlias(a.normalizedValue ?? a.value)}|${contextKey(a.applicability)}`; aliases.set(key, [...(aliases.get(key) ?? []), c.conceptId]); } for (const [key, ids] of aliases) if (new Set(ids).size > 1) d.push(error("CONTEXT", `Alias collision under overlapping context: ${key}.`, { relatedObjects: ids })); for (const c of s.concepts) for (const a of c.aliases ?? []) if (a.applicability && !contextsOverlap(c.applicability, a.applicability)) d.push(error("CONTEXT", `Alias applicability conflicts with concept: ${a.value}.`, { conceptId: c.conceptId })); }
-function stageReferences(s: SeedManifest, d: Diagnostic[]) { const concepts = new Set(s.concepts.map(c => c.conceptId)), sources = new Set(s.sourceReferences.map((x:any)=>x.sourceReferenceId)), constraints = new Set(s.constraints.map((x:any)=>x.constraintId)); for (const f of s.formulaFamilies) for (const v of f.variants ?? []) { if (!concepts.has(v.targetConceptId)) d.push(error("REFERENCE", `Formula target does not exist: ${v.targetConceptId}.`, { formulaId:v.formulaId,variantId:v.variantId })); for (const i of v.inputs ?? []) if (!concepts.has(i.conceptId)) d.push(error("REFERENCE", `Formula input concept does not exist: ${i.conceptId}.`, { formulaId:v.formulaId,variantId:v.variantId })); for (const p of v.provenance ?? []) if (!sources.has(p)) d.push(error("REFERENCE", `Unknown formula provenance source: ${p}.`, { formulaId:v.formulaId })); for (const c of v.constraints ?? []) if (!constraints.has(c)) d.push(error("REFERENCE", `Unknown formula constraint: ${c}.`, { formulaId:v.formulaId })); } }
-function stageDependencies(s: SeedManifest, d: Diagnostic[]) { const g = new Map<string,Set<string>>(); for (const c of s.concepts) g.set(c.conceptId,new Set()); for (const f of s.formulaFamilies) for (const v of f.variants ?? []) for (const i of v.inputs ?? []) g.get(v.targetConceptId)?.add(i.conceptId); const active=new Set<string>(),done=new Set<string>(); const visit=(n:string,path:string[])=>{if(active.has(n)){d.push(error("DEPENDENCY",`Dependency cycle detected: ${[...path,n].join(" -> ")}.`,{relatedObjects:[...path,n]}));return;} if(done.has(n))return; active.add(n); for(const x of g.get(n)??[]) visit(x,[...path,n]); active.delete(n);done.add(n)}; for(const n of g.keys())visit(n,[]); }
-function stageTypes(s: SeedManifest, d: Diagnostic[]) { const concepts=new Map(s.concepts.map(c=>[c.conceptId,c])); for(const f of s.formulaFamilies) for(const v of f.variants??[]){const inputs=new Map<string,TypeInfo>();for(const i of v.inputs??[])inputs.set(i.name,{dimension:i.unitSemantics.dimension,measure:i.unitSemantics.measureSemantics,currencyRequired:!!i.unitSemantics.currencyRequired});const actual=expressionType(v.expression,inputs,d), expected=concepts.get(v.targetConceptId)?.unitSemantics;if(actual&&expected&&actual.dimension!==expected.dimension)d.push(error("SEMANTIC_TYPE",`Formula output dimension ${actual.dimension} does not match target ${expected.dimension}.`,{formulaId:v.formulaId,variantId:v.variantId,conceptId:v.targetConceptId}));for(const i of v.inputs??[])if(i.temporalBinding?.relation==="PRIOR_COMPARABLE_PERIOD"&&typeof i.temporalBinding.offset!=="number")d.push(error("SEMANTIC_TYPE",`Prior-period input requires an explicit numeric offset: ${i.name}.`,{formulaId:v.formulaId,variantId:v.variantId}));}}
-function stageResolution(s: SeedManifest,d:Diagnostic[]){for(const f of s.formulaFamilies){const active=(f.variants??[]).filter((v:any)=>v.status==="ACTIVE");const best=Math.max(...active.map((v:any)=>v.fidelityRank));const ties=active.filter((v:any)=>v.fidelityRank===best);if(ties.length>1)d.push(error("FORMULA_RESOLUTION",`Ambiguous formula precedence for ${f.familyId}.`,{formulaId:ties[0].formulaId,relatedObjects:ties.map((v:any)=>v.variantId)}));}}
-function stageReachability(s:SeedManifest,d:Diagnostic[]){const formulas=new Map<string,number>();for(const f of s.formulaFamilies)for(const v of f.variants??[])formulas.set(v.targetConceptId,(formulas.get(v.targetConceptId)??0)+1);for(const c of s.concepts){const derived=c.role==="DERIVED"||c.role==="INTERMEDIATE";if(derived&&!formulas.has(c.conceptId))d.push(error("REACHABILITY",`Derived/intermediate concept has no formula family: ${c.conceptId}`,{conceptId:c.conceptId}));if(c.role==="PRIMITIVE_INPUT"&&formulas.has(c.conceptId))d.push(error("REACHABILITY",`Primitive input has a derived formula family: ${c.conceptId}`,{conceptId:c.conceptId}));}}
-function stageConsistency(s:SeedManifest,d:Diagnostic[]){const ids=new Set(s.concepts.map(c=>c.conceptId));for(const c of s.constraints)for(const id of c.referencedConceptIds??[])if(!ids.has(id))d.push(error("CONSISTENCY",`Constraint references unknown concept: ${id}.`,{relatedObjects:[c.constraintId,id]}));}
-export function compileOntology(seed:SeedManifest){const d:Diagnostic[]=[];stageLexical(seed,d);stageContext(seed,d);stageReferences(seed,d);stageDependencies(seed,d);stageTypes(seed,d);stageResolution(seed,d);stageReachability(seed,d);stageConsistency(seed,d);if(d.some(x=>x.severity==="ERROR"))return{diagnostics:d};const unsigned={releaseId:`ontrel_${seed.manifestId}`,semanticVersion:seed.semanticVersion,ontologyVersion:seed.ontologyVersion,compilerVersion:COMPILER_VERSION,publishedAt:"",effectiveDuring:{start:"2026-01-01",boundarySemantics:"[start,end)"},concepts:seed.concepts,relationships:seed.relationships,formulaFamilies:seed.formulaFamilies,constraints:seed.constraints,sourceReferences:seed.sourceReferences};const artifactHash=`sha256:${createHash("sha256").update(stable(unsigned)).digest("hex")}`;return{artifact:{...unsigned,artifactHash},diagnostics:d};}
+
+function stageLexical(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  if (!/^\d+\.\d+\.\d+$/.test(seed.semanticVersion)) diagnostics.push(error("LEXICAL", "semanticVersion must use SemVer MAJOR.MINOR.PATCH."));
+  if (!seed.manifestId || !seed.manifestVersion || !seed.ontologyVersion) diagnostics.push(error("LEXICAL", "Manifest identity and ontology version fields are required."));
+  const ids = new Set<string>();
+  for (const concept of seed.concepts) {
+    if (!/^concept_[a-z0-9_]+$/.test(concept.conceptId ?? "")) diagnostics.push(error("LEXICAL", `Invalid concept ID: ${concept.conceptId}.`, { conceptId: concept.conceptId }));
+    if (ids.has(concept.conceptId)) diagnostics.push(error("LEXICAL", `Duplicate concept ID: ${concept.conceptId}.`, { conceptId: concept.conceptId }));
+    ids.add(concept.conceptId);
+    for (const key of ["canonicalName", "definition", "realm", "role", "unitSemantics", "effectiveDuring"] as const) {
+      if (!concept[key as keyof Concept]) diagnostics.push(error("LEXICAL", `Missing ${key} on concept ${concept.conceptId}.`, { conceptId: concept.conceptId }));
+    }
+  }
+  for (const family of seed.formulaFamilies) {
+    if (!family.familyId || !family.targetConceptId) diagnostics.push(error("LEXICAL", "Formula family requires familyId and targetConceptId."));
+    if (!family.variants?.length) diagnostics.push(error("FORMULA_RESOLUTION", `Formula family has no variants: ${family.familyId}.`));
+    for (const variant of family.variants ?? []) {
+      if (!Number.isInteger(variant.fidelityRank) || variant.fidelityRank < 0) diagnostics.push(error("LEXICAL", `Invalid fidelityRank on ${variant.variantId}.`, { variantId: variant.variantId }));
+      if (!variant.expression || typeof variant.expression !== "object") diagnostics.push(error("LEXICAL", `Missing expression on ${variant.variantId}.`, { variantId: variant.variantId }));
+    }
+  }
+}
+
+function stageContext(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const aliases = new Map<string, { conceptId: string; applicability: ApplicabilityContext }[]>();
+  for (const concept of seed.concepts) {
+    for (const alias of concept.aliases ?? []) {
+      const normalized = normalizeAlias(alias.normalizedValue ?? alias.value);
+      const entries = aliases.get(normalized) ?? [];
+      for (const prior of entries) {
+        if (prior.conceptId !== concept.conceptId && contextsOverlap(prior.applicability, alias.applicability ?? {})) {
+          diagnostics.push(error("CONTEXT", `Alias collision under overlapping context: ${normalized}.`, { relatedObjects: [prior.conceptId, concept.conceptId] }));
+        }
+      }
+      entries.push({ conceptId: concept.conceptId, applicability: alias.applicability ?? {} });
+      aliases.set(normalized, entries);
+      if (alias.applicability && concept.applicability && !contextsOverlap(concept.applicability, alias.applicability)) {
+        diagnostics.push(error("CONTEXT", `Alias applicability conflicts with concept: ${alias.value}.`, { conceptId: concept.conceptId }));
+      }
+    }
+  }
+}
+
+function stageReferences(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const concepts = new Set(seed.concepts.map((concept) => concept.conceptId));
+  const sources = new Set(seed.sourceReferences.map((source) => source.sourceReferenceId));
+  const constraints = new Set(seed.constraints.map((constraint) => constraint.constraintId));
+  const relationshipIds = new Set<string>();
+  for (const relationship of seed.relationships) {
+    const id = typeof relationship.relationshipId === "string" ? relationship.relationshipId : "";
+    if (id && relationshipIds.has(id)) diagnostics.push(error("REFERENCE", `Duplicate relationship ID: ${id}.`));
+    if (id) relationshipIds.add(id);
+    if (!concepts.has(String(relationship.sourceConceptId))) diagnostics.push(error("REFERENCE", `Relationship source concept does not exist: ${String(relationship.sourceConceptId)}.`));
+    if (!concepts.has(String(relationship.targetConceptId))) diagnostics.push(error("REFERENCE", `Relationship target concept does not exist: ${String(relationship.targetConceptId)}.`));
+    for (const source of (relationship.sourceReferences as string[] | undefined) ?? []) if (!sources.has(source)) diagnostics.push(error("REFERENCE", `Unknown relationship provenance source: ${source}.`));
+  }
+  for (const concept of seed.concepts) {
+    for (const source of concept.sourceReferences ?? []) if (!sources.has(source)) diagnostics.push(error("REFERENCE", `Unknown concept source reference: ${source}.`, { conceptId: concept.conceptId }));
+    for (const relationship of concept.relationships ?? []) if (!relationshipIds.has(relationship.relationshipId)) diagnostics.push(error("REFERENCE", `Concept references unknown relationship: ${relationship.relationshipId}.`, { conceptId: concept.conceptId }));
+  }
+  const variantIds = new Set<string>();
+  const formulaIds = new Set<string>();
+  for (const family of seed.formulaFamilies) {
+    for (const variant of family.variants ?? []) {
+      if (variant.familyId !== family.familyId) diagnostics.push(error("REFERENCE", `Variant familyId does not match parent family: ${variant.variantId}.`, { variantId: variant.variantId }));
+      if (variant.targetConceptId !== family.targetConceptId) diagnostics.push(error("REFERENCE", `Variant targetConceptId does not match parent family: ${variant.variantId}.`, { variantId: variant.variantId }));
+      if (variantIds.has(variant.variantId)) diagnostics.push(error("REFERENCE", `Duplicate variant ID: ${variant.variantId}.`, { variantId: variant.variantId }));
+      if (formulaIds.has(variant.formulaId)) diagnostics.push(error("REFERENCE", `Duplicate formula ID: ${variant.formulaId}.`, { formulaId: variant.formulaId }));
+      variantIds.add(variant.variantId); formulaIds.add(variant.formulaId);
+      if (!concepts.has(variant.targetConceptId)) diagnostics.push(error("REFERENCE", `Formula target does not exist: ${variant.targetConceptId}.`, { formulaId: variant.formulaId, variantId: variant.variantId }));
+      const inputNames = new Set<string>();
+      for (const input of variant.inputs ?? []) {
+        if (!concepts.has(input.conceptId)) diagnostics.push(error("REFERENCE", `Formula input concept does not exist: ${input.conceptId}.`, { formulaId: variant.formulaId, variantId: variant.variantId }));
+        if (inputNames.has(input.name)) diagnostics.push(error("REFERENCE", `Duplicate formula input name: ${input.name}.`, { formulaId: variant.formulaId, variantId: variant.variantId }));
+        inputNames.add(input.name);
+      }
+      for (const source of variant.provenance ?? []) if (!sources.has(source)) diagnostics.push(error("REFERENCE", `Unknown formula provenance source: ${source}.`, { formulaId: variant.formulaId }));
+      for (const constraint of variant.constraints ?? []) if (!constraints.has(constraint)) diagnostics.push(error("REFERENCE", `Unknown formula constraint: ${constraint}.`, { formulaId: variant.formulaId }));
+    }
+  }
+}
+
+function stageDependencies(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const graph = new Map<string, Set<string>>();
+  for (const concept of seed.concepts) graph.set(concept.conceptId, new Set());
+  for (const family of seed.formulaFamilies) for (const variant of family.variants ?? []) for (const input of variant.inputs ?? []) graph.get(variant.targetConceptId)?.add(input.conceptId);
+  const active = new Set<string>();
+  const done = new Set<string>();
+  const visit = (node: string, path: string[]) => {
+    if (active.has(node)) {
+      diagnostics.push(error("DEPENDENCY", `Dependency cycle detected: ${[...path, node].join(" -> ")}.`, { relatedObjects: [...path, node] }));
+      return;
+    }
+    if (done.has(node)) return;
+    active.add(node);
+    for (const dependency of graph.get(node) ?? []) visit(dependency, [...path, node]);
+    active.delete(node); done.add(node);
+  };
+  for (const node of graph.keys()) visit(node, []);
+}
+
+function sameUnit(a: UnitSemantics, b: UnitSemantics): boolean {
+  return a.dimension === b.dimension && a.currencyRequired === b.currencyRequired && (a.measureSemantics ?? undefined) === (b.measureSemantics ?? undefined);
+}
+
+function stageTypes(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const concepts = new Map(seed.concepts.map((concept) => [concept.conceptId, concept]));
+  for (const family of seed.formulaFamilies) for (const variant of family.variants ?? []) {
+    const inputs = new Map<string, TypeInfo>();
+    for (const input of variant.inputs ?? []) inputs.set(input.name, { dimension: input.unitSemantics.dimension, measure: input.unitSemantics.measureSemantics, currencyRequired: input.unitSemantics.currencyRequired });
+    const actual = expressionType(variant.expression, inputs, diagnostics);
+    const expected = concepts.get(variant.targetConceptId)?.unitSemantics;
+    if (actual && expected) {
+      const expectedType: TypeInfo = { dimension: expected.dimension, measure: expected.measureSemantics, currencyRequired: expected.currencyRequired };
+      if (actual.dimension !== expectedType.dimension || actual.currencyRequired !== expectedType.currencyRequired) diagnostics.push(error("SEMANTIC_TYPE", `Formula output type does not match target ${variant.targetConceptId}: ${actual.dimension} vs ${expectedType.dimension}.`, { formulaId: variant.formulaId, variantId: variant.variantId, conceptId: variant.targetConceptId }));
+    }
+    if (expected && !sameUnit(variant.outputUnitSemantics, expected)) diagnostics.push(error("SEMANTIC_TYPE", `Declared output unit semantics do not match target concept ${variant.targetConceptId}.`, { formulaId: variant.formulaId, variantId: variant.variantId, conceptId: variant.targetConceptId }));
+    for (const input of variant.inputs ?? []) if (input.temporalBinding?.relation === "PRIOR_COMPARABLE_PERIOD" && typeof input.temporalBinding.offset !== "number") diagnostics.push(error("SEMANTIC_TYPE", `Prior-period input requires an explicit numeric offset: ${input.name}.`, { formulaId: variant.formulaId, variantId: variant.variantId }));
+  }
+}
+
+function stageResolution(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  for (const family of seed.formulaFamilies) {
+    const active = (family.variants ?? []).filter((variant) => variant.status === "ACTIVE");
+    if (!active.length) { diagnostics.push(error("FORMULA_RESOLUTION", `Formula family has no ACTIVE variant: ${family.familyId}.`)); continue; }
+    const best = Math.max(...active.map((variant) => variant.fidelityRank));
+    const ties = active.filter((variant) => variant.fidelityRank === best);
+    if (ties.length > 1) diagnostics.push(error("FORMULA_RESOLUTION", `Ambiguous formula precedence for ${family.familyId}.`, { formulaId: ties[0].formulaId, relatedObjects: ties.map((variant) => variant.variantId) }));
+  }
+}
+
+function stageReachability(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const formulas = new Map<string, number>();
+  for (const family of seed.formulaFamilies) for (const variant of family.variants ?? []) if (variant.status === "ACTIVE") formulas.set(variant.targetConceptId, (formulas.get(variant.targetConceptId) ?? 0) + 1);
+  for (const concept of seed.concepts) {
+    const derived = concept.role === "DERIVED" || concept.role === "INTERMEDIATE";
+    if (derived && !formulas.has(concept.conceptId)) diagnostics.push(error("REACHABILITY", `Derived/intermediate concept has no active formula family: ${concept.conceptId}`, { conceptId: concept.conceptId }));
+    if (concept.role === "PRIMITIVE_INPUT" && formulas.has(concept.conceptId)) diagnostics.push(error("REACHABILITY", `Primitive input has an active derived formula family: ${concept.conceptId}`, { conceptId: concept.conceptId }));
+  }
+}
+
+function stageConsistency(seed: SeedManifest, diagnostics: Diagnostic[]) {
+  const ids = new Set(seed.concepts.map((concept) => concept.conceptId));
+  for (const constraint of seed.constraints) for (const conceptId of constraint.referencedConceptIds ?? []) if (!ids.has(conceptId)) diagnostics.push(error("CONSISTENCY", `Constraint references unknown concept: ${conceptId}.`, { relatedObjects: [constraint.constraintId, conceptId] }));
+  for (const concept of seed.concepts) {
+    const required = new Set(concept.applicability?.requiredDimensions ?? []);
+    for (const dimension of required) if (!CONTEXT_KEYS.map((key) => key.toUpperCase()).some((key) => key.includes(dimension))) diagnostics.push(error("CONSISTENCY", `Unknown applicability context dimension: ${dimension}.`, { conceptId: concept.conceptId }));
+  }
+}
+
+export function compileOntology(seed: SeedManifest) {
+  const diagnostics: Diagnostic[] = [];
+  stageLexical(seed, diagnostics);
+  stageContext(seed, diagnostics);
+  stageReferences(seed, diagnostics);
+  stageDependencies(seed, diagnostics);
+  stageTypes(seed, diagnostics);
+  stageResolution(seed, diagnostics);
+  stageReachability(seed, diagnostics);
+  stageConsistency(seed, diagnostics);
+  if (diagnostics.some((diagnostic) => diagnostic.severity === "ERROR")) return { diagnostics };
+
+  const unsigned = {
+    releaseId: `ontrel_${seed.manifestId}`,
+    semanticVersion: seed.semanticVersion,
+    ontologyVersion: seed.ontologyVersion,
+    compilerVersion: COMPILER_VERSION,
+    publishedAt: "",
+    effectiveDuring: seed.effectiveDuring ?? { start: "2026-01-01", boundarySemantics: "[start,end)" },
+    concepts: seed.concepts,
+    relationships: seed.relationships,
+    formulaFamilies: seed.formulaFamilies,
+    constraints: seed.constraints,
+    sourceReferences: seed.sourceReferences,
+  };
+  try {
+    const artifactHash = `sha256:${createHash("sha256").update(stable(unsigned)).digest("hex")}`;
+    return { artifact: { ...unsigned, artifactHash }, diagnostics };
+  } catch (cause) {
+    diagnostics.push(error("ARTIFACT", cause instanceof Error ? cause.message : "Failed to serialize release artifact."));
+    return { diagnostics };
+  }
+}
