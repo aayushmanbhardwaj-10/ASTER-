@@ -8,5 +8,8 @@
     "test": "npm run typecheck && node --test test/*.test.mjs",
     "compile-seed": "npm run typecheck && node dist/cli.js packages/ontology/seed/draft-001.json"
   },
-  "devDependencies": { "typescript": "^5.0.0" "@types/node": "^22.0.0"}
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^22.0.0"
+  }
 }
