@@ -215,8 +215,8 @@ function stageResolution(seed: SeedManifest, diagnostics: Diagnostic[]) {
   for (const family of seed.formulaFamilies) {
     const active = (family.variants ?? []).filter((variant) => variant.status === "ACTIVE");
     if (!active.length) { diagnostics.push(error("FORMULA_RESOLUTION", `Formula family has no ACTIVE variant: ${family.familyId}.`)); continue; }
-    const best = Math.max(...active.map((variant) => variant.fidelityRank)), ties = active.filter((variant) => variant.fidelityRank === best);
-    if (ties.length > 1) diagnostics.push(error("FORMULA_RESOLUTION", `Ambiguous formula precedence for ${family.familyId}.`, { formulaId: ties[0].formulaId, relatedObjects: ties.map((variant) => variant.variantId) }));
+    const best = Math.max(...active.map((variant) => variant.fidelityRank)), ties = active.filter((variant) => variant.fidelityRank === best), firstTie = ties[0];
+    if (ties.length > 1 && firstTie) diagnostics.push(error("FORMULA_RESOLUTION", `Ambiguous formula precedence for ${family.familyId}.`, { formulaId: firstTie.formulaId, relatedObjects: ties.map((variant) => variant.variantId) }));
   }
 }
 
