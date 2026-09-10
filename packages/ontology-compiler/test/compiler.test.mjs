@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compileOntology } from "../dist/index.js";
 
-const root = new URL("../../", import.meta.url);
+const root = new URL("../../../", import.meta.url);
 const seed = JSON.parse(readFileSync(new URL("packages/ontology/seed/draft-001.json", root), "utf8"));
 const formulas = JSON.parse(readFileSync(new URL("packages/ontology/seed/draft-001.formulas.json", root), "utf8"));
 seed.formulaFamilies = formulas.formulaFamilies;
