@@ -10,7 +10,7 @@
     "compile-seed": "npm run build && node dist/cli.js packages/ontology/seed/draft-001.json"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
+    "typescript": "^7.0.2",
     "@types/node": "^22.0.0"
   }
 }
