@@ -1,20 +1,34 @@
 /**
- * ASTER Financial Ontology — Phase 1 core contracts.
+ * ASTER Financial Ontology — Phase 1 canonical semantic contracts.
  *
- * This package describes financial meaning. It intentionally contains no
- * database, framework, retrieval, LLM, or executable financial-model logic.
+ * These contracts describe financial meaning and compilation inputs. They contain
+ * no database, framework, retrieval, LLM, or executable financial-model logic.
  */
 
 export type OntologyVersion = string;
 export type ConceptId = string;
 export type FormulaId = string;
+export type FormulaVariantId = string;
 export type SourceReferenceId = string;
+export type ConstraintId = string;
 
 export type OntologyStatus =
+  | "PROPOSED"
+  | "DRAFT"
+  | "RELEASE_CANDIDATE"
   | "ACTIVE"
   | "DEPRECATED"
   | "SUPERSEDED"
-  | "EXPERIMENTAL";
+  | "RETIRED";
+
+export type ConceptRealm = "REPORTING" | "ANALYTICAL" | "BOTH";
+export type ConceptRole =
+  | "ROOT"
+  | "METRIC"
+  | "PRIMITIVE_INPUT"
+  | "INTERMEDIATE"
+  | "DERIVED"
+  | "TAXONOMIC";
 
 export type ContextDimension =
   | "ACCOUNTING_FRAMEWORK"
@@ -25,7 +39,15 @@ export type ContextDimension =
   | "SECURITY_CLASS"
   | "CURRENCY"
   | "ECONOMIC_TIME"
+  | "PUBLICATION_TIME"
+  | "KNOWLEDGE_TIME"
   | "ONTOLOGY_TIME";
+
+export interface DateInterval {
+  start: string;
+  end?: string;
+  boundarySemantics: "[start,end)" | "[start,end]" | "(start,end)" | "(start,end]";
+}
 
 export interface ApplicabilityContext {
   requiredDimensions: readonly ContextDimension[];
@@ -37,12 +59,6 @@ export interface ApplicabilityContext {
   securityClass?: string;
   currency?: string;
   economicTime?: DateInterval;
-}
-
-export interface DateInterval {
-  start: string;
-  end?: string;
-  boundarySemantics: "[start,end)" | "[start,end]" | "(start,end)" | "(start,end]";
 }
 
 export type AliasKind =
@@ -59,6 +75,7 @@ export interface ConceptAlias {
   kind: AliasKind;
   applicability?: ApplicabilityContext;
   validDuring?: DateInterval;
+  status?: OntologyStatus;
 }
 
 export type RelationshipType =
@@ -75,7 +92,8 @@ export type RelationshipType =
   | "RELATED_TO"
   | "MEASURED_BY"
   | "APPLIES_TO"
-  | "DEFINED_BY";
+  | "DEFINED_BY"
+  | "SUPERSEDED_BY";
 
 export interface ConceptRelationship {
   relationshipId: string;
@@ -100,41 +118,105 @@ export type UnitDimension =
   | "PROBABILITY"
   | "SHARE_QUANTITY"
   | "INDEX_LEVEL"
-  | "DIMENSIONLESS"
-  | "OTHER";
+  | "DIMENSIONLESS";
+
+export type MeasureSemantics =
+  | "FLOW"
+  | "STOCK"
+  | "POINT_IN_TIME"
+  | "RATE"
+  | "RATIO"
+  | "COUNT"
+  | "DURATION";
+
+export type SignRepresentation = "DIRECTIONAL" | "ABSOLUTE_MAGNITUDE";
+export type EconomicPolarity =
+  | "INFLOW"
+  | "OUTFLOW"
+  | "EXPENSE"
+  | "BENEFIT"
+  | "NEUTRAL";
+
+export interface SignSemantics {
+  representation: SignRepresentation;
+  economicPolarity: EconomicPolarity;
+  normalizationPolicy: string;
+}
 
 export interface UnitSemantics {
   dimension: UnitDimension;
   canonicalUnit?: string;
   currencyRequired: boolean;
+  measureSemantics?: MeasureSemantics;
 }
 
 export interface SemanticConstraint {
-  constraintId: string;
-  kind: "APPLICABILITY" | "DOMAIN" | "DIMENSION" | "TEMPORAL" | "OTHER";
+  constraintId: ConstraintId;
+  kind: "APPLICABILITY" | "DOMAIN" | "DIMENSION" | "TEMPORAL" | "SIGN" | "OTHER";
   description: string;
   referencedConceptIds: readonly ConceptId[];
   applicability?: ApplicabilityContext;
 }
 
+export type TemporalRelation =
+  | "CURRENT_PERIOD"
+  | "PRIOR_COMPARABLE_PERIOD"
+  | "FORECAST_PERIOD"
+  | "TERMINAL_PERIOD"
+  | "POINT_IN_TIME"
+  | "SAME_PERIOD"
+  | "OFFSET_FROM_ANCHOR";
+
+export interface TemporalBinding {
+  relation: TemporalRelation;
+  anchor?: string;
+  offset?: number;
+  alignment?: "PERIOD_END" | "PERIOD_START" | "MID_PERIOD" | "EXACT_DATE";
+  granularity?: "DAY" | "MONTH" | "QUARTER" | "YEAR" | "EVENT";
+  calendar?: string;
+}
+
+export type ExpressionNode =
+  | { kind: "CONSTANT"; value: string; unitSemantics?: UnitSemantics }
+  | { kind: "INPUT"; inputName: string }
+  | { kind: "ADD" | "SUBTRACT" | "MULTIPLY" | "DIVIDE"; left: ExpressionNode; right: ExpressionNode }
+  | { kind: "POWER"; base: ExpressionNode; exponent: ExpressionNode }
+  | { kind: "NEGATE"; operand: ExpressionNode };
+
 export interface FormulaInput {
   name: string;
   conceptId: ConceptId;
+  semanticRole: string;
   required: boolean;
-  unitSemantics?: UnitSemantics;
+  unitSemantics: UnitSemantics;
+  signSemantics?: SignSemantics;
+  temporalBinding?: TemporalBinding;
 }
 
-export interface SemanticFormulaSpecification {
+export interface FormulaVariant {
+  variantId: FormulaVariantId;
   formulaId: FormulaId;
   version: string;
+  familyId: string;
+  targetConceptId: ConceptId;
+  fidelityRank: number;
   semanticDefinition: string;
+  semanticExpression: string;
+  expression: ExpressionNode;
   inputs: readonly FormulaInput[];
-  outputConceptId: ConceptId;
-  outputUnitSemantics?: UnitSemantics;
-  constraints: readonly SemanticConstraint[];
+  outputUnitSemantics: UnitSemantics;
+  constraints: readonly ConstraintId[];
   assumptions: readonly string[];
   applicableContext?: ApplicabilityContext;
-  implementationRef?: string;
+  provenance: readonly SourceReferenceId[];
+  status: OntologyStatus;
+}
+
+export interface FormulaFamily {
+  familyId: string;
+  targetConceptId: ConceptId;
+  variants: readonly FormulaVariant[];
+  solutionVariants?: readonly FormulaVariant[];
 }
 
 export interface KnowledgeSourceReference {
@@ -158,24 +240,35 @@ export interface FinancialConcept {
   conceptVersion: OntologyVersion;
   canonicalName: string;
   definition: string;
-  category: string;
+  realm: ConceptRealm;
+  role: ConceptRole;
+  domainTags: readonly string[];
+  classificationTags: readonly string[];
   status: OntologyStatus;
   applicability: ApplicabilityContext;
   aliases: readonly ConceptAlias[];
   relationships: readonly ConceptRelationship[];
-  unitSemantics?: UnitSemantics;
+  unitSemantics: UnitSemantics;
+  signSemantics?: SignSemantics;
   constraints: readonly SemanticConstraint[];
-  formulaSpecification?: SemanticFormulaSpecification;
+  formulaFamilies: readonly FormulaFamily[];
   sourceReferences: readonly SourceReferenceId[];
   effectiveDuring: DateInterval;
 }
 
-export interface OntologyRelease {
-  ontologyVersion: OntologyVersion;
+export interface OntologyReleaseArtifact {
   releaseId: string;
+  semanticVersion: string;
+  ontologyVersion: string;
+  artifactHash: string;
+  compilerVersion: string;
+  authoringCompilerVersion?: string;
+  parentReleaseId?: string;
   publishedAt: string;
   effectiveDuring: DateInterval;
   concepts: readonly FinancialConcept[];
   relationships: readonly ConceptRelationship[];
+  formulaFamilies: readonly FormulaFamily[];
+  constraints: readonly SemanticConstraint[];
   sourceReferences: readonly KnowledgeSourceReference[];
 }

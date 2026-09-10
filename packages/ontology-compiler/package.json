@@ -1,0 +1,12 @@
+{
+  "name": "@aster/ontology-compiler",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run typecheck && node --test test/*.test.mjs",
+    "compile-seed": "npm run typecheck && node dist/cli.js packages/ontology/seed/draft-001.json"
+  },
+  "devDependencies": { "typescript": "^5.0.0" }
+}

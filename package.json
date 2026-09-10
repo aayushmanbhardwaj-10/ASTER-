@@ -6,7 +6,8 @@
   "workspaces": [
     "apps/system-api",
     "packages/contracts",
-    "packages/ontology"
+    "packages/ontology",
+    "packages/ontology-compiler"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
