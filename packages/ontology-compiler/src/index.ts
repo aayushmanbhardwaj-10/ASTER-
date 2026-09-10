@@ -8,12 +8,12 @@ export interface Diagnostic {
   diagnosticId: string;
   severity: DiagnosticSeverity;
   phase: DiagnosticPhase;
-  conceptId?: string;
-  formulaId?: string;
-  variantId?: string;
-  sourceLocation?: string;
+  conceptId?: string | undefined;
+  formulaId?: string | undefined;
+  variantId?: string | undefined;
+  sourceLocation?: string | undefined;
   message: string;
-  relatedObjects?: readonly string[];
+  relatedObjects?: readonly string[] | undefined;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -41,7 +41,7 @@ export interface SeedManifest {
   effectiveDuring?: { start: string; end?: string; boundarySemantics: string };
 }
 
-interface TypeInfo { dimension: string; measure?: string; currencyRequired: boolean; }
+interface TypeInfo { dimension: string; measure?: string | undefined; currencyRequired: boolean; }
 
 const error = (phase: DiagnosticPhase, message: string, extra: Partial<Diagnostic> = {}): Diagnostic => ({ diagnosticId: `${phase}_${message}`.replace(/[^A-Za-z0-9_]+/g, "_").slice(0, 180), severity: "ERROR", phase, message, ...extra });
 
@@ -199,7 +199,7 @@ function stageTypes(seed: SeedManifest, diagnostics: Diagnostic[]) {
   const concepts = new Map(seed.concepts.map((concept) => [concept.conceptId, concept]));
   for (const family of seed.formulaFamilies) for (const variant of family.variants ?? []) {
     const inputs = new Map<string, TypeInfo>();
-    for (const input of variant.inputs ?? []) inputs.set(input.name, { dimension: input.unitSemantics.dimension, ...(input.unitSemantics.measureSemantics ? { measure: input.unitSemantics.measureSemantics } : {}), currencyRequired: input.unitSemantics.currencyRequired });
+    for (const input of variant.inputs ?? []) inputs.set(input.name, { dimension: input.unitSemantics.dimension, measure: input.unitSemantics.measureSemantics, currencyRequired: input.unitSemantics.currencyRequired });
     for (const input of variant.inputs ?? []) {
       const conceptUnit = concepts.get(input.conceptId)?.unitSemantics;
       if (conceptUnit && !sameUnit(input.unitSemantics, conceptUnit)) diagnostics.push(error("SEMANTIC_TYPE", `Formula input unit semantics do not match concept ${input.conceptId}.`, { formulaId: variant.formulaId, variantId: variant.variantId }));
